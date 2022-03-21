@@ -1,0 +1,240 @@
+<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,viewport-fit=contain"><link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"><script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/vue/2.6.14/vue.min.js"></script><script src="//unpkg.com/element-ui@2.15.7/lib/index.js"></script><style>@import url(//unpkg.com/element-ui@2.15.7/lib/theme-chalk/index.css);.danger-background{background-color:#fde2e2}.success-background{background-color:#e1f3d8}.left-space{margin-left:2px}</style></head><body><div id="app"><template><el-card class="box-card" ref="mainCard"><div slot="header" class="clearfix"><el-tooltip class="item" effect="dark" content="更多節拍器" placement="bottom-start"><el-button @click="drawer = true" type="primary"><i class="material-icons">more_horiz</i></el-button></el-tooltip><el-tooltip class="item" effect="dark" content="讀取節拍器設定檔" placement="bottom-end"><el-button style="float:right;margin:0 3px" type="primary" @click="checkFile"><i class="material-icons">file_upload</i> <input type="file" id="fileInput" style="display:none" accept=".json" @change="checkFileSure"></el-button></el-tooltip><el-tooltip class="item" effect="dark" content="下載全部節拍器設定" placement="bottom"><el-button style="float:right;margin:0 3px" type="primary" @click="downloadFileClick"><i class="material-icons">file_download</i></el-button></el-tooltip></div><div v-if="selectIndex != null"><el-input style="width:calc(100% - 75px)" type="text" placeholder="標題" v-model="settingData[selectIndex].title" maxlength="20" @focus="titleSave" @change="titleChange" show-word-limit></el-input><el-tooltip class="item left-space" effect="dark" content="刪除" placement="bottom"><el-popconfirm title="刪除這個設定？" icon="el-icon-warning" icon-color="red" @confirm="settingDelete"><el-button type="danger" slot="reference"><i class="material-icons">delete</i></el-button></el-popconfirm></el-tooltip><br><br><el-descriptions direction="vertical" :column="isTooSmall ? 1 : 2" border><el-descriptions-item label="拍數"><el-input-number @focus="focusSelectAll($event)" size="large" :min="0" :max="999" v-model="settingData[selectIndex].beats" :disabled="start"></el-input-number><span class="left-space">Beats</span></el-descriptions-item><el-descriptions-item label="速度"><el-input-number @focus="focusSelectAll($event)" size="large" :min="1" v-model="settingData[selectIndex].bpm" :disabled="start"></el-input-number><span class="left-space">BPM</span></el-descriptions-item><el-descriptions-item label="重音" :content-class-name="settingData[selectIndex].isStress ? 'success-background' : 'danger-background'"><el-switch v-model="settingData[selectIndex].isStress" active-text="需要重音" inactive-text="不要重音" active-color="#13ce66" inactive-color="#ff4949" :disabled="start"></el-switch><br><br>第幾個音是重音？<el-input-number @focus="focusSelectAll($event)" size="large" :min="1" :max="settingData[selectIndex].beats" v-model="settingData[selectIndex].stressOrder" :disabled="start"></el-input-number></el-descriptions-item><el-descriptions-item label="動作"><el-tooltip class="item" effect="dark" :content="start ? '暫停' : '開始'" placement="bottom"><el-button :type="start ? 'danger' : 'success'" @click="metronomeStartClick" size="large"><i class="material-icons large">{{ start ? 'pause' : 'play_arrow' }}</i></el-button></el-tooltip></el-descriptions-item></el-descriptions></div></el-card><el-drawer title="drawer-title" direction="ltr" :visible.sync="drawer" :with-header="false"><div style="position:sticky;top:0;z-index:100;background-color:#fff;padding:5px" align="center"><el-button type="success" @click="settingAdd" circle><i class="material-icons">add</i></el-button></div><el-table :data="settingData" :show-header="false"><el-table-column prop="title" label="標題" align="center"><template slot-scope="scope"><el-button type="text" title="scope.row.title" @click="settingListClick(scope.$index)">{{scope.row.title}}</el-button></template></el-table-column><div style="text-align:left;line-height:1.2em" slot="empty">暫無數據，請由上方 ➕ 按鈕新增設定。</div></el-table></el-drawer></template></div></body><script>var Main = {
+        data() {
+            return {
+                titleTemp: "",
+                drawer: false,
+                selectIndex: null,
+                settingData: [],
+                settingDefault: {
+                    title: "Title",
+                    beats: 30,
+                    bpm: 120,
+                    isStress: true,
+                    stressOrder: 1,
+                },
+                checkData: {
+                    title: function (x) {
+                        return typeof x === "string";
+                    },
+                    beats: function (x) {
+                        return typeof x === "number" && x >= 1;
+                    },
+                    bpm: function (x) {
+                        return typeof x === "number" && x >= 1;
+                    },
+                    isStress: function (x) {
+                        return typeof x === "boolean";
+                    },
+                    stressOrder: function (x) {
+                        return typeof x === "number" && x >= 1;
+                    }
+                },
+                start: false,
+                metronomeIntervalID: null,
+                beatNumber: 0,
+                isTooSmall: false,
+                noSleep: new NoSleep(),
+                audioBuffers: null,
+            };
+        },
+        mounted() {
+            // 畫面適應
+            this.setIsTooSmall()
+            window.addEventListener("resize", this.setIsTooSmall);
+        },
+        destroyed() {
+            window.removeEventListener("resize", this.setIsTooSmall);
+        },
+
+        methods: {
+            // 聚焦即全選
+            focusSelectAll(event) {
+                event.currentTarget.select();
+            },
+            // 切換選取的設定時
+            settingChange() {
+                this.drawer = false;
+                this.start = false;
+                this.metronomeStopSound();
+            },
+            // 點抽屜列表後動作
+            settingListClick(index) {
+                this.selectIndex = index;
+                this.settingChange();
+                this.$message({
+                    message: `已選取 ${this.settingData[this.selectIndex].title} 。`,
+                    center: true,
+                    type: "info",
+                    showClose: true
+                });
+            },
+            // 刪除設定
+            settingDelete() {
+                this.settingData.splice(this.selectIndex, 1);
+                this.selectIndex = null;
+                this.settingChange();
+                this.$message({
+                    message: "已刪除。",
+                    center: true,
+                    type: "success",
+                    showClose: true
+                });
+            },
+            // 新增設定
+            settingAdd() {
+                this.settingData.unshift(JSON.parse(JSON.stringify(this.settingDefault)));
+                this.selectIndex = 0;
+                this.settingChange();
+                this.$message({
+                    message: "已新增。",
+                    center: true,
+                    type: "success",
+                    showClose: true
+                });
+            },
+            // 為了恢復標題，不給填空～儲存標題
+            titleSave() {
+                this.titleTemp = JSON.parse(JSON.stringify(this.settingData[this.selectIndex].title));
+            },
+            // 為了恢復標題，不給填空～空值時恢復
+            titleChange() {
+                if (this.settingData[this.selectIndex].title.length == 0) {
+                    this.settingData[this.selectIndex].title = this.titleTemp;
+                }
+            },
+            // 限制第幾個重音在拍數中
+            getStressOrderRange(stressOrder, beats) {
+                if (stressOrder < 1) {
+                    return 1;
+                } else if (stressOrder > beats) {
+                    return beats;
+                }
+                return stressOrder;
+            },
+            // 節拍器放聲音
+            metronomePlaySound(tipGainNode) {
+                let isStress = this.settingData[this.selectIndex].isStress;
+                let beats = this.settingData[this.selectIndex].beats;
+                this.settingData[this.selectIndex].stressOrder = stressOrder = this.getStressOrderRange(this.settingData[this.selectIndex].stressOrder, beats);
+
+                this.beatNumber++;
+                if (this.beatNumber > beats) {
+                    this.beatNumber -= beats;
+                }
+                // source 只能 start 一次，所以每次都要重創
+                if (isStress && this.beatNumber == stressOrder) {
+                    // 連接並播放
+                    let player = new Tone.Player().toDestination();
+                    player.buffer = this.audioBuffers.get("top");
+                    player.start();
+                } else {
+                    // 連接並播放
+                    let player = new Tone.Player().connect(tipGainNode);
+                    player.buffer = this.audioBuffers.get("tip");
+                    player.start();
+                }
+            },
+            // 按下開始節拍器
+            metronomeStartClick() {
+                this.start = !this.start;
+                if (this.start) {
+                    this.noSleep.enable();
+                    // buffer 設定
+                    if (!this.audioBuffers)
+                        this.audioBuffers = new Tone.ToneAudioBuffers({
+                            tip: "../sounds/tip.mp3",
+                            top: "../sounds/top.mp3",
+                        });
+                    // 給 tip 一個 gainNode，用來調音量
+                    let tipGainNode = new Tone.Gain(0.4).toDestination();
+                    // 打擊
+                    this.metronomeIntervalID = setInterval(this.metronomePlaySound, 60 / this.settingData[this.selectIndex].bpm * 1000, tipGainNode);
+                } else {
+                    this.metronomeStopSound();
+                }
+            },
+            // 節拍器停止
+            metronomeStopSound() {
+                this.noSleep.disable();
+                this.beatNumber = 0;
+                clearInterval(this.metronomeIntervalID);
+            },
+            // 觸發 <input type="file" /> 被按
+            checkFile() {
+                document.querySelector('#fileInput').click()
+            },
+            // 選好檔案
+            checkFileSure(value) {
+                // 讀檔
+                let file = value.target.files[0];
+                reader = new FileReader();
+                reader.readAsText(file);
+                reader.onload = this.fileTextToObject;
+            },
+            fileTextToObject(e) {
+                data = JSON.parse(e.target.result);
+                // 檢查格式
+                try {
+                    if (!(Array.isArray(data) && data.length > 0)) throw "";
+                    let defaultKeys = Object.keys(this.checkData);
+                    for (item of data) {
+                        for (key in this.checkData) {
+                            if (!item.hasOwnProperty(key)) throw "";
+                            if (!this.checkData[key](item[key])) throw "";
+                        }
+                    }
+                    this.$message({
+                        message: `讀取成功！`,
+                        center: true,
+                        type: "success",
+                        showClose: true
+                    });
+                    this.settingData = data;
+                } catch (error) {
+                    this.$message({
+                        message: `格式錯誤，讀取失敗。`,
+                        center: true,
+                        type: "error",
+                        showClose: true
+                    });
+                }
+                document.querySelector("#fileInput").value = "";
+            },
+            // 下載設定
+            downloadFileClick() {
+                if (this.settingData.length == 0) {
+                    this.$message({
+                        message: `無數據，不需下載。`,
+                        center: true,
+                        type: "error",
+                        showClose: true
+                    });
+                    return
+                }
+                // 建一個 a 實現下載
+                let blob = new Blob([JSON.stringify(this.settingData)], { type: "application/json" });
+                let url = URL.createObjectURL(blob);
+                let a = document.createElement('a');
+                a.href = url;
+                a.download = "metronomeSettings.json";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                this.$message({
+                    message: `下載成功！`,
+                    center: true,
+                    type: "success",
+                    showClose: true
+                });
+            },
+            // 裝置是不是太小
+            setIsTooSmall: function () {
+                this.isTooSmall = this.$refs.mainCard.$el.clientWidth < 450
+            }
+        },
+        computed: {
+        }
+    };
+    var Ctor = Vue.extend(Main)
+    new Ctor().$mount('#app')</script></html>
